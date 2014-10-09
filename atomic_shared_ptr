@@ -320,19 +320,32 @@ public:
         ptr(nullptr),header(nullptr)
     {}
     
-    template<class Y> explicit shared_ptr(Y* p):
+    template<class Y> explicit shared_ptr(Y* p)
+    try:
         ptr(p),
         header(new shared_ptr_header_separate<Y*,void>(p))
     {}
+    catch(...){
+        delete p;
+    }
+    
 
-    template<class Y, class D> shared_ptr(Y* p, D d):
+    template<class Y, class D> shared_ptr(Y* p, D d)
+    try:
         ptr(p),header(new shared_ptr_header_separate<Y*,D>(p,d))
     {}
+    catch(...){
+        d(p);
+    }
     
-    template <class D> shared_ptr(std::nullptr_t p, D d):
+    template <class D> shared_ptr(std::nullptr_t p, D d)
+    try:
         ptr(p),
         header(new shared_ptr_header_separate<std::nullptr_t,D>(p,d))
     {}
+    catch(...){
+        d(p);
+    }
     
     template<class Y, class D, class A> shared_ptr(Y* p, D d, A a);
     template <class D, class A> shared_ptr(std::nullptr_t p, D d, A a);
