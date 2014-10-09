@@ -848,7 +848,7 @@ public:
     atomic_shared_ptr& operator=(const atomic_shared_ptr&) = delete;
     shared_ptr<T> operator=(shared_ptr<T> newval) noexcept
     {
-        store(newval);
+        store(static_cast<shared_ptr<T>&&>(newval));
         return newval;
     }
     
