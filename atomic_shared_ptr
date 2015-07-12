@@ -278,6 +278,36 @@ struct shared_ptr_header_separate:
     }
 };
 
+template<class T>
+struct shared_ptr_header_combined:
+        public shared_ptr_header_block<T*>{
+    typedef typename std::aligned_storage<sizeof(T),alignof(T)>::type storage_type;
+    storage_type storage;
+
+    T* value(){
+        return static_cast<T*>(get_base_ptr());
+    }
+
+    void* get_base_ptr()
+    {
+        return &storage;
+    }
+
+    template<typename ... Args>
+    shared_ptr_header_combined(Args&& ... args)
+    {
+        new(get_base_ptr()) T(static_cast<Args&&>(args)...);
+    }
+
+    void do_delete()
+    {
+        value()->~T();
+    }
+};
+
+template<typename T,typename ... Args>
+shared_ptr<T> make_shared(Args&& ... args);
+
 template<class T> class shared_ptr {
 private:
     T* ptr;
@@ -289,6 +319,9 @@ private:
     friend class shared_ptr;
     template<typename U>
     friend class weak_ptr;
+
+    template<typename U,typename ... Args>
+    friend shared_ptr<U> make_shared(Args&& ... args);
 
     shared_ptr(shared_ptr_header_block_base* header_,unsigned index):
         ptr(header_?header_->get_ptr<T>(index):nullptr),header(header_)
@@ -307,6 +340,10 @@ private:
         }
     }
 
+    shared_ptr(shared_ptr_header_combined<T>* header_):
+        ptr(header_->value()),header(header_)
+    {}
+    
     void clear()
     {
         header=nullptr;
@@ -523,6 +560,13 @@ public:
 
 };
 
+template<typename T,typename ... Args>
+shared_ptr<T> make_shared(Args&& ... args){
+    return shared_ptr<T>(
+        new shared_ptr_header_combined<T>(
+            static_cast<Args&&>(args)...));
+}
+
 template<class T> class weak_ptr {
     T* ptr;
     shared_ptr_header_block_base* header;
@@ -674,12 +718,8 @@ class atomic_shared_ptr
     struct local_access{
         std::atomic<counted_ptr>& p;
         counted_ptr val;
-        
-        local_access(
-            std::atomic<counted_ptr>& p_,
-            std::memory_order order=std::memory_order_relaxed):
-            p(p_),val(p.load(order))
-        {
+
+        void acquire(std::memory_order order){
             if(!val.ptr)
                 return;
             for(;;){
@@ -690,9 +730,21 @@ class atomic_shared_ptr
             }
             ++val.access_count;
         }
+        
+        local_access(
+            std::atomic<counted_ptr>& p_,
+            std::memory_order order=std::memory_order_relaxed):
+            p(p_),val(p.load(order))
+        {
+            acquire(order);
+        }
 
         ~local_access()
         {
+            release();
+        }
+
+        void release(){
             if(!val.ptr)
                 return;
             counted_ptr target=val;
@@ -707,6 +759,14 @@ class atomic_shared_ptr
             }
         }
 
+        void refresh(counted_ptr newval,std::memory_order order){
+            if(newval.ptr==val.ptr)
+                return;
+            release();
+            val=newval;
+            acquire(order);
+        }
+        
         shared_ptr_header_block_base* get_ptr()
         {
             return val.ptr;
@@ -794,7 +854,8 @@ public:
             return true;
         }
         else{
-            expected=shared_ptr<T>(oldval.ptr,oldval.index);
+            guard.refresh(oldval,failure_order);
+            expected=guard.get_shared_ptr();
             return false;
         }
     }
@@ -804,28 +865,12 @@ public:
         std::memory_order success_order=std::memory_order_seq_cst,
         std::memory_order failure_order=std::memory_order_seq_cst) noexcept
     {
-        local_access guard(p);
-        if(guard.get_ptr()!=expected.header){
-            expected=guard.get_shared_ptr();
-            return false;
-        }
-        counted_ptr oldval(guard.val);
-        counted_ptr newval(
-            newptr.header,
-            newptr.header?newptr.header->get_ptr_index(newptr.ptr):0);
+        shared_ptr<T> local_expected=expected;
         do{
-            if(p.compare_exchange_weak(
-                   oldval,newval,success_order,failure_order)){
-                if(oldval.ptr){
-                    oldval.ptr->add_external_counters(oldval.access_count);
-                    oldval.ptr->dec_count();
-                }
-                newptr.clear();
+            if(compare_exchange_weak(expected,newptr,success_order,failure_order))
                 return true;
-            }
         }
-        while(oldval.ptr==expected.header);
-        expected=shared_ptr<T>(oldval.ptr,oldval.index);
+        while(expected==local_expected);
         return false;
     }
     
