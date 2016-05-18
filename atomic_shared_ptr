@@ -692,6 +692,21 @@ public:
     template<class U> bool owner_before(weak_ptr<U> const& b) const;
 };
 
+#ifdef _MSC_VER
+#define JSS_ASP_ALIGN_TO(alignment) __declspec(align(alignment))
+#ifdef _WIN64
+#define JSS_ASP_BITFIELD_SIZE 32
+#else
+#define JSS_ASP_BITFIELD_SIZE 16
+#endif
+#else
+#define JSS_ASP_ALIGN_TO(alignment) __attribute__((aligned(alignment)))
+#ifdef __LP64__
+#define JSS_ASP_BITFIELD_SIZE 32
+#else
+#define JSS_ASP_BITFIELD_SIZE 16
+#endif
+#endif
 
 template <class T>
 class atomic_shared_ptr
@@ -700,8 +715,8 @@ class atomic_shared_ptr
     friend class atomic_shared_ptr;
 
     struct counted_ptr{
-        unsigned access_count;
-        unsigned index;
+        unsigned access_count:JSS_ASP_BITFIELD_SIZE;
+        unsigned index:JSS_ASP_BITFIELD_SIZE;
         shared_ptr_header_block_base* ptr;
 
         counted_ptr() noexcept:
@@ -713,7 +728,7 @@ class atomic_shared_ptr
         {}
     };
 
-    mutable std::atomic<counted_ptr> p;
+    mutable JSS_ASP_ALIGN_TO(sizeof(counted_ptr)) std::atomic<counted_ptr> p;
 
     struct local_access{
         std::atomic<counted_ptr>& p;
